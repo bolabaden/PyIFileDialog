@@ -79,7 +79,7 @@ class GUID(*inherit):
             d1, d2, d3, d4 = cls._parse_args(d1, d2, d3, d4, *args)
         except Exception as e:
             raise OSError("Failed to construct a GUID") from e
-        identifier = (d1, d2, d3, d4)
+        identifier: tuple[int, int, int, bytes] = (d1, d2, d3, d4)
 
         with cls._lock:
             if identifier in cls._instances:
@@ -247,5 +247,57 @@ class GUID(*inherit):
     @staticmethod
     def to_string(guid_tuple: tuple[int, int, int, bytes]) -> str:
         data1, data2, data3, data4 = guid_tuple
+
+        # Ensure data4 is exactly 8 bytes long, padding with zeros if necessary
+        if len(data4) < 8:
+            data4 = data4.ljust(8, b"\x00")
+        elif len(data4) > 8:
+            data4 = data4[:8]
+
         hex4 = data4.hex()
         return f"{{{data1:08x}-{data2:04x}-{data3:04x}-{hex4[:4]}-{hex4[4:]}}}"
+
+
+if __name__ == "__main__":
+
+    # test_GUID_null
+    assert GUID() == GUID()
+    assert str(GUID()) == "{00000000-0000-0000-0000-000000000000}"
+
+    # test_dunder_eq
+    assert GUID("{00000000-0000-0000-C000-000000000046}") == GUID("{00000000-0000-0000-C000-000000000046}")
+
+    # test_dunder_str
+    assert str(GUID("{0002DF01-0000-0000-C000-000000000046}")) == "{0002DF01-0000-0000-C000-000000000046}"
+
+    # test_dunder_repr
+    assert repr(GUID("{0002DF01-0000-0000-C000-000000000046}")) == 'GUID("{0002DF01-0000-0000-C000-000000000046}")'
+
+    # test_invalid_constructor_arg
+    try:
+        GUID("abc")
+    except OSError:
+        ...
+    else:
+        raise AssertionError("GUID('abc') should have raised a WindowsError")
+
+    # test_from_progid
+    assert GUID.from_progid("Scripting.FileSystemObject") == GUID("{0D43FE01-F093-11CF-8940-00A0C9054228}")
+    try:
+        GUID.from_progid("abc")
+    except OSError:
+        ...
+    else:
+        raise AssertionError("GUID.from_progid('abc') should have raised a WindowsError")
+
+    # test_as_progid
+    assert GUID("{0D43FE01-F093-11CF-8940-00A0C9054228}").as_progid() == "Scripting.FileSystemObject"
+    try:
+        GUID("{00000000-0000-0000-C000-000000000046}").as_progid()
+    except OSError:
+        ...
+    else:
+        raise AssertionError("GUID('00000000-0000-0000-C000-000000000046').as_progid() should have raised a WindowsError")
+
+    # test_create_new
+    assert GUID.create_new() != GUID.create_new()

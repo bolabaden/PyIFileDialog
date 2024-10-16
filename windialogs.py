@@ -1,186 +1,101 @@
 from __future__ import annotations
 
 import errno
+import json
 import os
+import random
 
-from ctypes import POINTER, WINFUNCTYPE, byref, c_ulong, c_void_p, c_wchar_p, cast as cast_with_ctypes, windll
-from ctypes.wintypes import HMODULE, HWND, LPCWSTR
+from ctypes import POINTER, byref, c_void_p, c_wchar_p, cast as cast_with_ctypes, windll
+from ctypes.wintypes import HWND
 from pathlib import WindowsPath
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import comtypes  # pyright: ignore[reportMissingTypeStubs]
 import comtypes.client  # pyright: ignore[reportMissingTypeStubs]
 
 from com_helpers import HandleCOMCall
-from com_types import GUID
-from hresult import HRESULT, S_FALSE, S_OK
-from interfaces import (
-    COMDLG_FILTERSPEC,
-    FOS_ALLOWMULTISELECT,
-    FOS_FILEMUSTEXIST,
-    FOS_FORCEFILESYSTEM,
-    FOS_FORCESHOWHIDDEN,
-    FOS_OVERWRITEPROMPT,
-    FOS_PATHMUSTEXIST,
-    FOS_PICKFOLDERS,
-    SFGAO_FILESYSTEM,
-    SFGAO_FOLDER,
-    SIGDN,
-    CLSID_FileOpenDialog,
-    CLSID_FileSaveDialog,
-    COMFunctionPointers,
-    IFileDialogEvents,
-    IFileOpenDialog,
-    IFileSaveDialog,
-    IShellItem,
-)
+from constants import COMDLG_FILTERSPEC, SFGAO, SIGDN, FileOpenOptions
+from hresult import HRESULT, S_OK
+from interfaces import CLSID_FileOpenDialog, CLSID_FileSaveDialog, IFileDialogControlEvents, IFileDialogCustomize, IFileOpenDialog, IFileSaveDialog, IID_IFileDialogCustomize, IShellItem
 
 if TYPE_CHECKING:
-    from ctypes import _FuncPointer, _Pointer
-    from ctypes.wintypes import LPWSTR
+    from ctypes import c_ulong
+    from ctypes.wintypes import BOOL, DWORD, LPWSTR
 
     from interfaces import IFileDialog, IShellItemArray
 
 
-class FileDialogEventsHandler(comtypes.COMObject):
-    _com_interfaces_: Sequence[type[comtypes.IUnknown]] = [IFileDialogEvents]
+class FileDialogControlEvents(comtypes.COMObject):
+    _com_interfaces_: Sequence[type[comtypes.IUnknown]] = [IFileDialogControlEvents]
 
-    def OnFileOk(self, pfd: IFileDialog) -> HRESULT:
-        ppsi: IShellItem = pfd.GetResult()
-        pszFilePath = ppsi.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
-        print(f"OnFileOk, selected '{pszFilePath}'")
-        resolved_path = WindowsPath(pszFilePath).resolve()
-        if not resolved_path.exists():
-            print(f"Invalid file selected: {resolved_path}")
-            return S_FALSE  # Cancel closing the dialog
+    def __init__(self, file_dialog: IFileDialog):
+        self._file_dialog: IFileDialog = file_dialog
+        self.selected_path: str | None = None
+        super().__init__()
+
+    def OnItemSelected(self, pfdc: IFileDialogCustomize, dwIDCtl: DWORD, dwIDItem: DWORD) -> HRESULT:  # noqa: N803
+        # Implement the logic for when an item is selected
         return S_OK
 
-    def OnFolderChanging(self, ifd: IFileDialog, isiFolder: IShellItem) -> HRESULT:  # noqa: N803
-        folder_path = isiFolder.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
-        print(f"OnFolderChanging to folder: {folder_path}")
-        attributes = isiFolder.GetAttributes(0xFFFFFFFF)
-        print(f"Folder attributes: {attributes}")
+    def OnButtonClicked(self, pfdc: IFileDialogCustomize, dwIDCtl: DWORD) -> HRESULT:  # noqa: N803
+        if dwIDCtl == 1001:  # ID for 'Select Folder' button
+            print("Button with ID 1001 ('Select Folder') was clicked.")
+            self.selected_path = self.get_selected_folder()  # Store the selected path
+            if self.selected_path:
+                print(f"Stored selected folder: {self.selected_path}")
+                self._file_dialog.Close(S_OK)
         return S_OK
 
-    def OnFolderChange(self, pfd: IFileDialog) -> HRESULT:
-        folder: IShellItem = pfd.GetFolder()
-        folder_path = folder.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
-        print(f"OnFolderChange, current folder: {folder_path}")
+    def get_selected_folder(self) -> str | None:
+        try:
+            selected_item = self._file_dialog.GetCurrentSelection()
+        except OSError:
+            selected_item = None
+
+        if selected_item:
+            szFilePath: str = selected_item.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
+            path = WindowsPath(szFilePath)
+            if path.exists() and path.is_dir():
+                return str(path)
+            if path.exists() and path.is_file():
+                return str(path.parent)
+
+        current_folder_item: IShellItem = self._file_dialog.GetFolder()
+        if current_folder_item:
+            current_folder_path: str = current_folder_item.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
+            return str(WindowsPath(current_folder_path))
+
+        return None
+
+    def OnCheckButtonToggled(self, pfdc: IFileDialogCustomize, dwIDCtl: DWORD, bChecked: BOOL) -> HRESULT:  # noqa: N803
+        # Implement the logic for when a check button is toggled
         return S_OK
 
-    def OnSelectionChange(self, pfd: IFileDialog) -> HRESULT:
-        selection: IShellItem = pfd.GetCurrentSelection()
-        selection_path = selection.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
-        print(f"OnSelectionChange, selected item: {selection_path}")
+    def OnControlActivating(self, pfdc: IFileDialogCustomize, dwIDCtl: DWORD) -> HRESULT:  # noqa: N803
+        # Implement the logic for when a control is activated
         return S_OK
 
-    def OnShareViolation(self, pfd: IFileDialog, psi: IShellItem) -> int:
-        file_path = psi.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
-        print(f"OnShareViolation for file: {file_path}!")
-        return 1
 
-    def OnTypeChange(self, ifd: IFileDialog) -> HRESULT:
-        ftIndex = ifd.GetFileTypeIndex()
-        print(f"OnTypeChange, new file type index: {ftIndex}")
-        return S_OK
-
-    def OnOverwrite(self, ifd: IFileDialog, isi: IShellItem) -> int:
-        file_path = isi.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
-        # 1 = Allow Overwrite, 0 will disallow
-        print(f"OnOverwrite for file: {file_path}. Allowing overwrite!")
-        return 1
-
-
-# Helper to convert std::wstring to LPCWSTR
-def string_to_LPCWSTR(s: str) -> LPCWSTR:
-    return c_wchar_p(s)
-
-
-# Helper to convert LPCWSTR to std::wstring
-def LPCWSTR_to_string(s: LPCWSTR) -> str | None:
-    return s.value
-
-
-# Load COM function pointers
-def LoadCOMFunctionPointers(dialog_type: type[IFileDialog | IFileOpenDialog | IFileSaveDialog]) -> COMFunctionPointers:
-    comFuncPtrs = COMFunctionPointers()
-    comFuncPtrs.hOle32 = comFuncPtrs.load_library("ole32.dll")
-    comFuncPtrs.hShell32 = comFuncPtrs.load_library("shell32.dll")
-
-
-    # Get function pointers
-    if comFuncPtrs.hOle32:
-        PFN_CoInitialize: type[_FuncPointer] = WINFUNCTYPE(HRESULT, POINTER(dialog_type))
-        PFN_CoUninitialize: type[_FuncPointer] = WINFUNCTYPE(None)
-        PFN_CoCreateInstance: type[_FuncPointer] = WINFUNCTYPE(HRESULT, POINTER(GUID), c_void_p, c_ulong, POINTER(GUID), POINTER(POINTER(dialog_type)))
-        PFN_CoTaskMemFree: type[_FuncPointer] = WINFUNCTYPE(None, c_void_p)
-        comFuncPtrs.pCoInitialize = comFuncPtrs.resolve_function(comFuncPtrs.hOle32, b"CoInitialize", PFN_CoInitialize)
-        comFuncPtrs.pCoUninitialize = comFuncPtrs.resolve_function(comFuncPtrs.hOle32, b"CoUninitialize", PFN_CoUninitialize)
-        comFuncPtrs.pCoCreateInstance = comFuncPtrs.resolve_function(comFuncPtrs.hOle32, b"CoCreateInstance", PFN_CoCreateInstance)
-        comFuncPtrs.pCoTaskMemFree = comFuncPtrs.resolve_function(comFuncPtrs.hOle32, b"CoTaskMemFree", PFN_CoTaskMemFree)
-
-    if comFuncPtrs.hShell32:
-        PFN_SHCreateItemFromParsingName: type[_FuncPointer] = WINFUNCTYPE(HRESULT, LPCWSTR, c_void_p, POINTER(GUID), POINTER(POINTER(IShellItem)))
-        comFuncPtrs.pSHCreateItemFromParsingName = comFuncPtrs.resolve_function(comFuncPtrs.hShell32, b"SHCreateItemFromParsingName", PFN_SHCreateItemFromParsingName)
-    return comFuncPtrs
-
-
-def FreeCOMFunctionPointers(comFuncPtrs: Any):  # noqa: N803
-    if comFuncPtrs.hOle32:
-        windll.kernel32.FreeLibrary(cast_with_ctypes(comFuncPtrs.hOle32, HMODULE))
-    if comFuncPtrs.hShell32:
-        windll.kernel32.FreeLibrary(cast_with_ctypes(comFuncPtrs.hShell32, HMODULE))
-
-
-def showDialog(
-    fileDialog: IFileOpenDialog | IFileSaveDialog | IFileDialog,  # noqa: N803
+def show_file_dialog(
+    fileDialog: IFileOpenDialog | IFileSaveDialog,  # noqa: N803
     hwndOwner: HWND,  # noqa: N803
 ) -> bool:
     """Shows the IFileDialog. Returns True if the user progressed to the end and found a file. False if they cancelled."""
     hr: HRESULT | int = -1
+    CANCELLED_BY_USER = -2147023673
+
     try:
         hr = fileDialog.Show(hwndOwner)
+        print(f"Dialog shown successfully, HRESULT: {hr}")
     except OSError as e:
-        CANCELLED_BY_USER = 0x800704C7
         if e.winerror == CANCELLED_BY_USER:
+            print("Operation was canceled by the user.")
             return False
-        if hr != -1:
-            raise HRESULT(hr).exception("Failed to show the file dialog!") from e  # noqa: B904
-        return False
+        raise
     else:
-        return True
+        HRESULT.raise_for_status(hr, "An unexpected error occurred showing the file browser dialog")
 
-
-def createShellItem(comFuncs: Any, path: str) -> _Pointer[IShellItem]:  # noqa: N803, ARG001
-    if not comFuncs.pSHCreateItemFromParsingName:
-        raise OSError("comFuncs.pSHCreateItemFromParsingName not found")
-    shell_item = POINTER(IShellItem)()
-    hr = comFuncs.pSHCreateItemFromParsingName(path, None, IShellItem._iid_, byref(shell_item))
-    if hr != S_OK:
-        raise HRESULT(hr).exception(f"Failed to create shell item from path: {path}")
-    return shell_item
-
-
-def setDialogAttributes(
-    fileDialog: IFileDialog | IFileOpenDialog | IFileSaveDialog,  # noqa: N803
-    title: str,
-    okButtonLabel: str | None = None,  # noqa: N803
-    fileNameLabel: str | None = None,  # noqa: N803
-) -> None:
-    if title:
-        fileDialog.SetTitle(title)
-    if okButtonLabel:
-        fileDialog.SetOkButtonLabel(okButtonLabel)
-    if fileNameLabel:
-        fileDialog.SetFileNameLabel(fileNameLabel)
-
-
-def setupFileDialogEvents(
-    fileDialog: IFileOpenDialog | IFileSaveDialog | IFileDialog,  # noqa: N803
-) -> int:
-    #events_interface = IFileDialogEvents()
-    events_handler = FileDialogEventsHandler()
-    return fileDialog.Advise(events_handler)
+    return True
 
 
 DEFAULT_FILTERS: list[COMDLG_FILTERSPEC] = [
@@ -233,162 +148,555 @@ DEFAULT_FILTERS: list[COMDLG_FILTERSPEC] = [
     COMDLG_FILTERSPEC("Vagrantfiles", "Vagrantfile"),
     COMDLG_FILTERSPEC("Terraform Files", "*.tf"),
     COMDLG_FILTERSPEC("HCL Files", "*.hcl"),
-    COMDLG_FILTERSPEC("Kubernetes YAML Files", "*.yaml;*.yml")
+    COMDLG_FILTERSPEC("Kubernetes YAML Files", "*.yaml;*.yml"),
 ]
 
 
-def configureFileDialog(  # noqa: PLR0913
-    comFuncs: Any,  # noqa: N803
-    fileDialog: IFileOpenDialog | IFileSaveDialog | IFileDialog,  # noqa: N803
-    filters: list[COMDLG_FILTERSPEC] | None = None,  # noqa: N803
-    defaultFolder: str | os.PathLike | None = None,  # noqa: N803
-    options: int | None = None,
-):
-    if defaultFolder:
-        defaultFolder_path: WindowsPath = WindowsPath(defaultFolder).resolve()
-        defaultFolder_pathStr = str(defaultFolder_path)
-        if not defaultFolder_path.is_dir():
-            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), defaultFolder_pathStr)
-        shell_item: comtypes._Pointer[IShellItem] = createShellItem(comFuncs, defaultFolder_pathStr)
-        with HandleCOMCall(f"SetFolder({defaultFolder_pathStr})") as check:
-            check(fileDialog.SetFolder(shell_item))
-        with HandleCOMCall(f"SetDefaultFolder({defaultFolder_pathStr})") as check:
-            check(fileDialog.SetDefaultFolder(shell_item))
+def configure_file_dialog(  # noqa: PLR0913, PLR0912, C901, PLR0915
+    file_dialog: IFileOpenDialog | IFileSaveDialog,
+    title: str | None = None,
+    options: int = 0,
+    default_folder: str | None = None,
+    ok_button_label: str | None = None,
+    file_name_label: str | None = None,
+    file_types: list[tuple[str, str]] | None = None,
+    default_extension: str | None = None,
+    dialog_interfaces: list[comtypes.IUnknown | comtypes.COMObject] | None = None,
+    hwnd: HWND | int | None = None,
+) -> list[str] | None:  # sourcery skip: low-code-quality
+    cookies: list[int] = []
+    if dialog_interfaces:
+        for interface in dialog_interfaces:
+            cookie = file_dialog.Advise(interface)
+            cookies.append(cookie)
+    else:
+        dialog_interfaces = []
+    hwnd = HWND(hwnd) if isinstance(hwnd, int) else hwnd
+    hwnd = HWND(0) if hwnd is None else hwnd
+    try:
+        if default_folder is not None:
+            defaultFolder_path: WindowsPath = WindowsPath(default_folder).expanduser().resolve(strict=False)
+            if not defaultFolder_path.exists() and defaultFolder_path.is_dir():
+                raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(defaultFolder_path))
+            shell_item = POINTER(IShellItem)()
+            hr = windll.shell32.SHCreateItemFromParsingName(
+                str(defaultFolder_path),
+                None,
+                IShellItem._iid_,
+                byref(shell_item),
+            )
+            if hr == S_OK:
+                with HandleCOMCall(f"SetFolder({defaultFolder_path})") as check:
+                    check(file_dialog.SetFolder(shell_item))
+                with HandleCOMCall(f"SetDefaultFolder({defaultFolder_path})") as check:
+                    check(file_dialog.SetDefaultFolder(shell_item))
 
-    if options is not None:
+        # Resolve contradictory options
+        if options & FileOpenOptions.FOS_ALLNONSTORAGEITEMS:
+            if options & FileOpenOptions.FOS_FORCEFILESYSTEM:
+                print("Removing FileOpenOptions.FOS_FORCEFILESYSTEM to prevent conflict with FOS_ALLNONSTORAGEITEMS")
+                options &= ~FileOpenOptions.FOS_FORCEFILESYSTEM
+            if options & FileOpenOptions.FOS_PICKFOLDERS:
+                print("Removing FileOpenOptions.FOS_PICKFOLDERS to prevent conflict with FOS_ALLNONSTORAGEITEMS")
+                options &= ~FileOpenOptions.FOS_PICKFOLDERS
+
+        def get_flag_differences(set_options: int, get_options: int) -> list[str]:
+            differences: int = set_options ^ get_options  # XOR to find differing bits
+            differing_flags: list[str] = []
+            for flag in FileOpenOptions:
+                if differences & flag:
+                    set_in_options = bool(set_options & flag)
+                    set_in_cur_options = bool(get_options & flag)
+                    differing_flags.append(f"{flag.name}: SetOptions={'SET' if set_in_options else 'UNSET'}, GetOptions={'SET' if set_in_cur_options else 'UNSET'}")
+            return differing_flags
+
+        original_dialog_options: int = file_dialog.GetOptions()
+        print(f"Original dialog options: {original_dialog_options}")
         with HandleCOMCall(f"SetOptions({options})") as check:
-            check(fileDialog.SetOptions(options))
-        cur_options = fileDialog.GetOptions()
-        assert options == cur_options
+            check(file_dialog.SetOptions(options))
+        cur_options: int = file_dialog.GetOptions()
+        print(f"GetOptions({cur_options})")
 
-    if filters is None:  # if empty actually leave it empty. None means default.
-        filters = DEFAULT_FILTERS
-    filter_array = (COMDLG_FILTERSPEC * len(filters))()
-    for i, dialogFilter in enumerate(filters):
-        filter_array[i].pszName = dialogFilter.pszName
-        filter_array[i].pszSpec = dialogFilter.pszSpec
+        assert original_dialog_options != cur_options, f"SetOptions call was completely ignored by the dialog interface, attempted to set {options}, " f"but retrieved {cur_options} (the original)"
+        if options != cur_options:
+            differing_flags: list[str] = get_flag_differences(options, cur_options)
+            print(f"Differing flags: {', '.join(differing_flags)}")
 
-    #hr = fileDialog.SetFileTypes(len(filters), c_void_p(addressof(filter_array)))
-    #if hr != S_OK:
-    #    raise HRESULT(hr).exception("Failed to set file types")
+        if not options & FileOpenOptions.FOS_PICKFOLDERS and file_types:
+            print("Using custom file filters")
+            filters = (COMDLG_FILTERSPEC * len(file_types))(*[(c_wchar_p(name), c_wchar_p(spec)) for name, spec in file_types])
+            with HandleCOMCall(f"SetFileTypes({len(filters)})") as check:
+                check(file_dialog.SetFileTypes(len(filters), cast_with_ctypes(filters, POINTER(c_void_p))))
+
+        if title:
+            file_dialog.SetTitle(title)
+
+        if ok_button_label:
+            file_dialog.SetOkButtonLabel(ok_button_label)
+        elif isinstance(file_dialog, IFileSaveDialog):
+            file_dialog.SetOkButtonLabel("Save")
+        elif options & FileOpenOptions.FOS_PICKFOLDERS:
+            file_dialog.SetOkButtonLabel("Select Folder")
+        else:
+            file_dialog.SetOkButtonLabel("Select File")
+
+        if file_name_label:
+            file_dialog.SetFileNameLabel(file_name_label)
+        if default_extension:
+            file_dialog.SetDefaultExtension(default_extension)
+
+        if show_file_dialog(file_dialog, hwnd):
+            control_event_handler: FileDialogControlEvents | None = next(
+                (interface for interface in dialog_interfaces if isinstance(interface, FileDialogControlEvents)),
+                None,
+            )
+            if control_event_handler and control_event_handler.selected_path:
+                return [control_event_handler.selected_path]
+            return (
+                [get_save_file_dialog_results(file_dialog)]
+                if isinstance(file_dialog, IFileSaveDialog)
+                else get_open_file_dialog_results(file_dialog)
+            )
+
+    finally:
+        for cookie in cookies:
+            file_dialog.Unadvise(cookie)
+    return None
 
 
-def browse_folders(
-    title: str = "Select Folder",
-    default_folder: str = "C:\\",
-    allow_multiple: bool = False,  # noqa: FBT001, FBT002
-    show_hidden: bool = False  # noqa: FBT001, FBT002
-) -> list[str]:
-    comFuncs: COMFunctionPointers = LoadCOMFunctionPointers(IFileOpenDialog)
-    fileOpenDialog: IFileOpenDialog = comtypes.client.CreateObject(CLSID_FileOpenDialog, interface=IFileOpenDialog)
+def open_file_and_folder_dialog(  # noqa: C901, PLR0913, PLR0912
+    title: str | None = "Open File",
+    default_folder: str | None = None,
+    default_extension: str | None = None,
+    *,
+    overwrite_prompt: bool = False,
+    strict_file_types: bool = False,
+    no_change_dir: bool = True,
+    force_filesystem: bool = True,
+    all_non_storage_items: bool = False,
+    no_validate: bool = False,
+    allow_multiple_selection: bool = False,
+    path_must_exist: bool = True,
+    file_must_exist: bool = True,
+    create_prompt: bool = False,
+    share_aware: bool = False,
+    no_readonly_return: bool = False,
+    no_test_file_create: bool = False,
+    hide_mru_places: bool = False,
+    hide_pinned_places: bool = False,
+    no_dereference_links: bool = False,
+    add_to_recent: bool = True,
+    show_hidden_files: bool = False,
+    default_no_minimode: bool = False,
+    force_preview_pane_on: bool = False,
+    ok_button_text: str | None = None,
+) -> list[str] | None:  # sourcery skip: low-code-quality
+    """Opens a file dialog to select files.
 
-    options: int = FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST
-    if allow_multiple:
-        options |= FOS_ALLOWMULTISELECT
-    if show_hidden:
-        options |= FOS_FORCESHOWHIDDEN
+    Args:
+        title (str | None): The title of the dialog.
+        default_folder (str | None): The initial folder to open.
+        default_extension (str | None): The default file extension.
+        overwrite_prompt (bool): Prompts if the selected file already exists. FileOpenOptions.FOS_OVERWRITEPROMPT.
+        strict_file_types (bool): Restricts selection to specified file types. FileOpenOptions.FOS_STRICTFILETYPES.
+        no_change_dir (bool): Prevents changing the current working directory. FileOpenOptions.FOS_NOCHANGEDIR.
+        force_filesystem (bool): Ensures only file system items are shown. FileOpenOptions.FOS_FORCEFILESYSTEM.
+        all_non_storage_items (bool): Allows selection of non-file system items. FileOpenOptions.FOS_ALLNONSTORAGEITEMS.
+        no_validate (bool): Disables file name validation. FileOpenOptions.FOS_NOVALIDATE.
+        allow_multiple_selection (bool): Allows selecting multiple files. FileOpenOptions.FOS_ALLOWMULTISELECT.
+        path_must_exist (bool): Requires the path to exist. FileOpenOptions.FOS_PATHMUSTEXIST.
+        file_must_exist (bool): Requires the file to exist. FileOpenOptions.FOS_FILEMUSTEXIST.
+        create_prompt (bool): Prompts to create a new file if it doesn't exist. FileOpenOptions.FOS_CREATEPROMPT.
+        share_aware (bool): Ensures the dialog is aware of sharing conflicts. FileOpenOptions.FOS_SHAREAWARE.
+        no_readonly_return (bool): Prevents selection of read-only items. FileOpenOptions.FOS_NOREADONLYRETURN.
+        no_test_file_create (bool): Disables testing file creation ability. FileOpenOptions.FOS_NOTESTFILECREATE.
+        hide_mru_places (bool): Hides most recently used places. FileOpenOptions.FOS_HIDEMRUPLACES.
+        hide_pinned_places (bool): Hides pinned places. FileOpenOptions.FOS_HIDEPINNEDPLACES.
+        no_dereference_links (bool): Prevents dereferencing shortcuts. FileOpenOptions.FOS_NODEREFERENCELINKS.
+        add_to_recent (bool): Prevents adding the file to recent files. FileOpenOptions.FOS_DONTADDTORECENT.
+        show_hidden_files (bool): Shows hidden files and folders. FileOpenOptions.FOS_FORCESHOWHIDDEN.
+        default_no_minimode (bool): Uses default non-minimized mode. FileOpenOptions.FOS_DEFAULTNOMINIMODE.
+        force_preview_pane_on (bool): Forces the preview pane to be visible. FileOpenOptions.FOS_FORCEPREVIEWPANEON.
+        ok_button_text (str): The text for the button used to select/confirm the dialog.
 
-    filters = []
-    configureFileDialog(comFuncs, fileOpenDialog, filters, default_folder, options)
-    setDialogAttributes(fileOpenDialog, title)
-    showDialog(fileOpenDialog, HWND(0))
-
-    return getFileOpenDialogResults(comFuncs, fileOpenDialog)
-
-def browse_files(
-    title: str = "Select File(s)",
-    default_folder: str = "C:\\",
-    allow_multiple: bool = False,  # noqa: FBT001, FBT002
-    show_hidden: bool = True,  # noqa: FBT001, FBT002
-    filters: list[COMDLG_FILTERSPEC] | None = None
-) -> list[str]:
-    comFuncs: COMFunctionPointers = LoadCOMFunctionPointers(IFileOpenDialog)
-    fileOpenDialog: IFileOpenDialog = comtypes.client.CreateObject(CLSID_FileOpenDialog, interface=IFileOpenDialog)
-
-    options: int = FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST
-    if allow_multiple:
-        options |= FOS_ALLOWMULTISELECT
-    if show_hidden:
-        options |= FOS_FORCESHOWHIDDEN
-
-    if filters is None:
-        filters = DEFAULT_FILTERS
-
-    configureFileDialog(comFuncs, fileOpenDialog, filters, default_folder, options)
-    setDialogAttributes(fileOpenDialog, title)
-    showDialog(fileOpenDialog, HWND(0))
-
-    results: list[str] = getFileOpenDialogResults(comFuncs, fileOpenDialog)
-    return results
-
-def save_file(
-    title: str = "Save File",
-    default_folder: str = "C:\\",
-    default_file_name: str = "Untitled",
-    overwrite_prompt: bool = True,
-    show_hidden: bool = False,
-    filters: list[COMDLG_FILTERSPEC] | None = None
-) -> str:
-    comFuncs: COMFunctionPointers = LoadCOMFunctionPointers(IFileSaveDialog)
-    fileSaveDialog: IFileSaveDialog = comtypes.client.CreateObject(CLSID_FileSaveDialog, interface=IFileSaveDialog)
-
-    options = FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST
+    Returns:
+        list[str] | None: A list of selected file paths or None if cancelled.
+    """
+    options = 0
     if overwrite_prompt:
-        options |= FOS_OVERWRITEPROMPT
-    if show_hidden:
-        options |= FOS_FORCESHOWHIDDEN
+        options |= FileOpenOptions.FOS_OVERWRITEPROMPT
+    if strict_file_types:
+        options |= FileOpenOptions.FOS_STRICTFILETYPES
+    if no_change_dir:
+        options |= FileOpenOptions.FOS_NOCHANGEDIR
+    if force_filesystem:
+        options |= FileOpenOptions.FOS_FORCEFILESYSTEM
+    if all_non_storage_items:
+        options |= FileOpenOptions.FOS_ALLNONSTORAGEITEMS
+    if no_validate:
+        options |= FileOpenOptions.FOS_NOVALIDATE
+    if allow_multiple_selection:
+        options |= FileOpenOptions.FOS_ALLOWMULTISELECT
+    if path_must_exist:
+        options |= FileOpenOptions.FOS_PATHMUSTEXIST
+    if file_must_exist:
+        options |= FileOpenOptions.FOS_FILEMUSTEXIST
+    if create_prompt:
+        options |= FileOpenOptions.FOS_CREATEPROMPT
+    if share_aware:
+        options |= FileOpenOptions.FOS_SHAREAWARE
+    if no_readonly_return:
+        options |= FileOpenOptions.FOS_NOREADONLYRETURN
+    if no_test_file_create:
+        options |= FileOpenOptions.FOS_NOTESTFILECREATE
+    if hide_mru_places:
+        options |= FileOpenOptions.FOS_HIDEMRUPLACES
+    if hide_pinned_places:
+        options |= FileOpenOptions.FOS_HIDEPINNEDPLACES
+    if no_dereference_links:
+        options |= FileOpenOptions.FOS_NODEREFERENCELINKS
+    if not add_to_recent:
+        options |= FileOpenOptions.FOS_DONTADDTORECENT
+    if show_hidden_files:
+        options |= FileOpenOptions.FOS_FORCESHOWHIDDEN
+    if default_no_minimode:
+        options |= FileOpenOptions.FOS_DEFAULTNOMINIMODE
+    if force_preview_pane_on:
+        options |= FileOpenOptions.FOS_FORCEPREVIEWPANEON
+    file_dialog: IFileOpenDialog = comtypes.client.CreateObject(CLSID_FileOpenDialog, interface=IFileOpenDialog)
+    customize_handler: IFileDialogCustomize = file_dialog.QueryInterface(IFileDialogCustomize, IID_IFileDialogCustomize)
+    folder_button_id = 1001
+    customize_handler.AddPushButton(folder_button_id, "Select Folder")
+    control_event_handler = FileDialogControlEvents(file_dialog)
+    return configure_file_dialog(file_dialog, title, options, default_folder, ok_button_text, None, None, default_extension, [control_event_handler])
 
-    if filters is None:
-        filters = DEFAULT_FILTERS
 
-    configureFileDialog(comFuncs, fileSaveDialog, filters, default_folder, options)
-    setDialogAttributes(fileSaveDialog, title)
-    fileSaveDialog.SetFileName(default_file_name)
-    showDialog(fileSaveDialog, HWND(0))
+def open_file_dialog(  # noqa: C901, PLR0913, PLR0912
+    title: str | None = "Open File",
+    default_folder: str | None = None,
+    file_types: list[tuple[str, str]] | None = None,
+    default_extension: str | None = None,
+    *,
+    overwrite_prompt: bool = False,
+    strict_file_types: bool = False,
+    no_change_dir: bool = True,
+    force_filesystem: bool = True,
+    all_non_storage_items: bool = False,
+    no_validate: bool = False,
+    allow_multiple_selection: bool = False,
+    path_must_exist: bool = True,
+    file_must_exist: bool = True,
+    create_prompt: bool = False,
+    share_aware: bool = False,
+    no_readonly_return: bool = False,
+    no_test_file_create: bool = False,
+    hide_mru_places: bool = False,
+    hide_pinned_places: bool = False,
+    no_dereference_links: bool = False,
+    add_to_recent: bool = True,
+    show_hidden_files: bool = False,
+    default_no_minimode: bool = False,
+    force_preview_pane_on: bool = False,
+    ok_button_text: str | None = None,
+) -> list[str] | None:  # sourcery skip: low-code-quality
+    """Opens a file dialog to select files.
 
-    result: str = getFileSaveDialogResults(comFuncs, fileSaveDialog)
-    return result
+    Args:
+        title (str | None): The title of the dialog.
+        default_folder (str | None): The initial folder to open.
+        file_types (list[tuple[str, str]] | None): A list of file type filters.
+        default_extension (str | None): The default file extension.
+        overwrite_prompt (bool): Prompts if the selected file already exists. FileOpenOptions.FOS_OVERWRITEPROMPT.
+        strict_file_types (bool): Restricts selection to specified file types. FileOpenOptions.FOS_STRICTFILETYPES.
+        no_change_dir (bool): Prevents changing the current working directory. FileOpenOptions.FOS_NOCHANGEDIR.
+        force_filesystem (bool): Ensures only file system items are shown. FileOpenOptions.FOS_FORCEFILESYSTEM.
+        all_non_storage_items (bool): Allows selection of non-file system items. FileOpenOptions.FOS_ALLNONSTORAGEITEMS.
+        no_validate (bool): Disables file name validation. FileOpenOptions.FOS_NOVALIDATE.
+        allow_multiple_selection (bool): Allows selecting multiple files. FileOpenOptions.FOS_ALLOWMULTISELECT.
+        path_must_exist (bool): Requires the path to exist. FileOpenOptions.FOS_PATHMUSTEXIST.
+        file_must_exist (bool): Requires the file to exist. FileOpenOptions.FOS_FILEMUSTEXIST.
+        create_prompt (bool): Prompts to create a new file if it doesn't exist. FileOpenOptions.FOS_CREATEPROMPT.
+        share_aware (bool): Ensures the dialog is aware of sharing conflicts. FileOpenOptions.FOS_SHAREAWARE.
+        no_readonly_return (bool): Prevents selection of read-only items. FileOpenOptions.FOS_NOREADONLYRETURN.
+        no_test_file_create (bool): Disables testing file creation ability. FileOpenOptions.FOS_NOTESTFILECREATE.
+        hide_mru_places (bool): Hides most recently used places. FileOpenOptions.FOS_HIDEMRUPLACES.
+        hide_pinned_places (bool): Hides pinned places. FileOpenOptions.FOS_HIDEPINNEDPLACES.
+        no_dereference_links (bool): Prevents dereferencing shortcuts. FileOpenOptions.FOS_NODEREFERENCELINKS.
+        add_to_recent (bool): Prevents adding the file to recent files. FileOpenOptions.FOS_DONTADDTORECENT.
+        show_hidden_files (bool): Shows hidden files and folders. FileOpenOptions.FOS_FORCESHOWHIDDEN.
+        default_no_minimode (bool): Uses default non-minimized mode. FileOpenOptions.FOS_DEFAULTNOMINIMODE.
+        force_preview_pane_on (bool): Forces the preview pane to be visible. FileOpenOptions.FOS_FORCEPREVIEWPANEON.
+        ok_button_text (str): The text for the button used to select/confirm the dialog.
+
+    Returns:
+        list[str] | None: A list of selected file paths or None if cancelled.
+    """
+    options = 0
+    if overwrite_prompt:
+        options |= FileOpenOptions.FOS_OVERWRITEPROMPT
+    if strict_file_types:
+        options |= FileOpenOptions.FOS_STRICTFILETYPES
+    if no_change_dir:
+        options |= FileOpenOptions.FOS_NOCHANGEDIR
+    if force_filesystem:
+        options |= FileOpenOptions.FOS_FORCEFILESYSTEM
+    if all_non_storage_items:
+        options |= FileOpenOptions.FOS_ALLNONSTORAGEITEMS
+    if no_validate:
+        options |= FileOpenOptions.FOS_NOVALIDATE
+    if allow_multiple_selection:
+        options |= FileOpenOptions.FOS_ALLOWMULTISELECT
+    if path_must_exist:
+        options |= FileOpenOptions.FOS_PATHMUSTEXIST
+    if file_must_exist:
+        options |= FileOpenOptions.FOS_FILEMUSTEXIST
+    if create_prompt:
+        options |= FileOpenOptions.FOS_CREATEPROMPT
+    if share_aware:
+        options |= FileOpenOptions.FOS_SHAREAWARE
+    if no_readonly_return:
+        options |= FileOpenOptions.FOS_NOREADONLYRETURN
+    if no_test_file_create:
+        options |= FileOpenOptions.FOS_NOTESTFILECREATE
+    if hide_mru_places:
+        options |= FileOpenOptions.FOS_HIDEMRUPLACES
+    if hide_pinned_places:
+        options |= FileOpenOptions.FOS_HIDEPINNEDPLACES
+    if no_dereference_links:
+        options |= FileOpenOptions.FOS_NODEREFERENCELINKS
+    if not add_to_recent:
+        options |= FileOpenOptions.FOS_DONTADDTORECENT
+    if show_hidden_files:
+        options |= FileOpenOptions.FOS_FORCESHOWHIDDEN
+    if default_no_minimode:
+        options |= FileOpenOptions.FOS_DEFAULTNOMINIMODE
+    if force_preview_pane_on:
+        options |= FileOpenOptions.FOS_FORCEPREVIEWPANEON
+    file_dialog: IFileOpenDialog = comtypes.client.CreateObject(CLSID_FileOpenDialog, interface=IFileOpenDialog)
+    return configure_file_dialog(file_dialog, title, options, default_folder, ok_button_text, None, file_types, default_extension)
 
 
-def getFileOpenDialogResults(  # noqa: C901, PLR0912, PLR0915
-    comFuncs: COMFunctionPointers,  # noqa: N803
-    fileOpenDialog: IFileOpenDialog,  # noqa: N803
+def save_file_dialog(  # noqa: C901, PLR0913, PLR0912
+    title: str | None = "Save File",
+    default_folder: str | None = None,
+    file_types: list[tuple[str, str]] | None = None,
+    default_extension: str | None = None,
+    *,
+    overwrite_prompt: bool = True,
+    strict_file_types: bool = False,
+    no_change_dir: bool = True,
+    force_filesystem: bool = True,
+    all_non_storage_items: bool = False,
+    no_validate: bool = False,
+    path_must_exist: bool = True,
+    file_must_exist: bool = False,
+    create_prompt: bool = False,
+    share_aware: bool = False,
+    no_readonly_return: bool = False,
+    no_test_file_create: bool = False,
+    hide_mru_places: bool = False,
+    hide_pinned_places: bool = False,
+    no_dereference_links: bool = False,
+    add_to_recent: bool = True,
+    show_hidden_files: bool = False,
+    default_no_minimode: bool = False,
+    force_preview_pane_on: bool = False,
+    ok_button_text: str | None = None,
+) -> list[str] | None:  # sourcery skip: low-code-quality
+    """Opens a file dialog to save a file.
+
+    Args:
+        title (str | None): The title of the dialog.
+        default_folder (str | None): The initial folder to open.
+        file_types (list[tuple[str, str]] | None): A list of file type filters.
+        default_extension (str | None): The default file extension.
+        overwrite_prompt (bool): Prompts if the selected file already exists. FileOpenOptions.FOS_OVERWRITEPROMPT.
+        strict_file_types (bool): Restricts selection to specified file types. FileOpenOptions.FOS_STRICTFILETYPES.
+        no_change_dir (bool): Prevents changing the current working directory. FileOpenOptions.FOS_NOCHANGEDIR.
+        force_filesystem (bool): Ensures only file system items are shown. FileOpenOptions.FOS_FORCEFILESYSTEM.
+        all_non_storage_items (bool): Allows selection of non-file system items. FileOpenOptions.FOS_ALLNONSTORAGEITEMS.
+        no_validate (bool): Disables file name validation. FileOpenOptions.FOS_NOVALIDATE.
+        path_must_exist (bool): Requires the path to exist. FileOpenOptions.FOS_PATHMUSTEXIST.
+        file_must_exist (bool): Requires the file to exist. FileOpenOptions.FOS_FILEMUSTEXIST.
+        create_prompt (bool): Prompts to create a new file if it doesn't exist. FileOpenOptions.FOS_CREATEPROMPT.
+        share_aware (bool): Ensures the dialog is aware of sharing conflicts. FileOpenOptions.FOS_SHAREAWARE.
+        no_readonly_return (bool): Prevents selection of read-only items. FileOpenOptions.FOS_NOREADONLYRETURN.
+        no_test_file_create (bool): Disables testing file creation ability. FileOpenOptions.FOS_NOTESTFILECREATE.
+        hide_mru_places (bool): Hides most recently used places. FileOpenOptions.FOS_HIDEMRUPLACES.
+        hide_pinned_places (bool): Hides pinned places. FileOpenOptions.FOS_HIDEPINNEDPLACES.
+        no_dereference_links (bool): Prevents dereferencing shortcuts. FileOpenOptions.FOS_NODEREFERENCELINKS.
+        add_to_recent (bool): Prevents adding the file to recent files. FileOpenOptions.FOS_DONTADDTORECENT.
+        show_hidden_files (bool): Shows hidden files and folders. FileOpenOptions.FOS_FORCESHOWHIDDEN.
+        default_no_minimode (bool): Uses default non-minimized mode. FileOpenOptions.FOS_DEFAULTNOMINIMODE.
+        force_preview_pane_on (bool): Forces the preview pane to be visible. FileOpenOptions.FOS_FORCEPREVIEWPANEON.
+        ok_button_text (str): The text for the button used to select/confirm the dialog.
+
+    Returns:
+        list[str] | None: A list of selected file paths or None if cancelled.
+    """
+    options = 0
+    if overwrite_prompt:
+        options |= FileOpenOptions.FOS_OVERWRITEPROMPT
+    if strict_file_types:
+        options |= FileOpenOptions.FOS_STRICTFILETYPES
+    if no_change_dir:
+        options |= FileOpenOptions.FOS_NOCHANGEDIR
+    if force_filesystem:
+        options |= FileOpenOptions.FOS_FORCEFILESYSTEM
+    if all_non_storage_items:
+        options |= FileOpenOptions.FOS_ALLNONSTORAGEITEMS
+    if no_validate:
+        options |= FileOpenOptions.FOS_NOVALIDATE
+    if path_must_exist:
+        options |= FileOpenOptions.FOS_PATHMUSTEXIST
+    if file_must_exist:
+        options |= FileOpenOptions.FOS_FILEMUSTEXIST
+    if create_prompt:
+        options |= FileOpenOptions.FOS_CREATEPROMPT
+    if share_aware:
+        options |= FileOpenOptions.FOS_SHAREAWARE
+    if no_readonly_return:
+        options |= FileOpenOptions.FOS_NOREADONLYRETURN
+    if no_test_file_create:
+        options |= FileOpenOptions.FOS_NOTESTFILECREATE
+    if hide_mru_places:
+        options |= FileOpenOptions.FOS_HIDEMRUPLACES
+    if hide_pinned_places:
+        options |= FileOpenOptions.FOS_HIDEPINNEDPLACES
+    if no_dereference_links:
+        options |= FileOpenOptions.FOS_NODEREFERENCELINKS
+    if not add_to_recent:
+        options |= FileOpenOptions.FOS_DONTADDTORECENT
+    if show_hidden_files:
+        options |= FileOpenOptions.FOS_FORCESHOWHIDDEN
+    if default_no_minimode:
+        options |= FileOpenOptions.FOS_DEFAULTNOMINIMODE
+    if force_preview_pane_on:
+        options |= FileOpenOptions.FOS_FORCEPREVIEWPANEON
+    options &= ~FileOpenOptions.FOS_PICKFOLDERS  # Required (exceptions otherwise)
+    options &= ~FileOpenOptions.FOS_ALLOWMULTISELECT  # Required (exceptions otherwise)
+    file_dialog: IFileSaveDialog = comtypes.client.CreateObject(CLSID_FileSaveDialog, interface=IFileSaveDialog)
+    return configure_file_dialog(file_dialog, title, options, default_folder, ok_button_text, None, file_types, default_extension)
+
+
+def open_folder_dialog(  # noqa: C901, PLR0913, PLR0912
+    title: str | None = "Select Folder",
+    default_folder: str | None = None,
+    *,
+    overwrite_prompt: bool = False,
+    strict_file_types: bool = False,
+    no_change_dir: bool = False,
+    force_filesystem: bool = True,
+    no_validate: bool = False,
+    allow_multiple_selection: bool = False,
+    path_must_exist: bool = True,
+    file_must_exist: bool = False,
+    create_prompt: bool = False,
+    share_aware: bool = False,
+    no_readonly_return: bool = False,
+    no_test_file_create: bool = False,
+    hide_mru_places: bool = False,
+    hide_pinned_places: bool = False,
+    no_dereference_links: bool = False,
+    add_to_recent: bool = True,
+    show_hidden_files: bool = False,
+    default_no_minimode: bool = False,
+    force_preview_pane_on: bool = False,
+    ok_button_text: str | None = None,
+) -> list[str] | None:  # sourcery skip: low-code-quality
+    """Opens a dialog to select folders.
+
+    Args:
+        title (str | None): The title of the dialog.
+        default_folder (str | None): The initial folder to open.
+        overwrite_prompt (bool): Prompts if the selected file already exists. FileOpenOptions.FOS_OVERWRITEPROMPT.
+        strict_file_types (bool): Restricts selection to specified file types. FileOpenOptions.FOS_STRICTFILETYPES.
+        no_change_dir (bool): Prevents changing the current working directory. FileOpenOptions.FOS_NOCHANGEDIR.
+        force_filesystem (bool): Ensures only file system items are shown. FileOpenOptions.FOS_FORCEFILESYSTEM.
+        no_validate (bool): Disables file name validation. FileOpenOptions.FOS_NOVALIDATE.
+        allow_multiple_selection (bool): Allows selecting multiple files. FileOpenOptions.FOS_ALLOWMULTISELECT.
+        path_must_exist (bool): Requires the path to exist. FileOpenOptions.FOS_PATHMUSTEXIST.
+        file_must_exist (bool): Requires the file to exist. FileOpenOptions.FOS_FILEMUSTEXIST.
+        create_prompt (bool): Prompts to create a new file if it doesn't exist. FileOpenOptions.FOS_CREATEPROMPT.
+        share_aware (bool): Ensures the dialog is aware of sharing conflicts. FileOpenOptions.FOS_SHAREAWARE.
+        no_readonly_return (bool): Prevents selection of read-only items. FileOpenOptions.FOS_NOREADONLYRETURN.
+        no_test_file_create (bool): Disables testing file creation ability. FileOpenOptions.FOS_NOTESTFILECREATE.
+        hide_mru_places (bool): Hides most recently used places. FileOpenOptions.FOS_HIDEMRUPLACES.
+        hide_pinned_places (bool): Hides pinned places. FileOpenOptions.FOS_HIDEPINNEDPLACES.
+        no_dereference_links (bool): Prevents dereferencing shortcuts. FileOpenOptions.FOS_NODEREFERENCELINKS.
+        add_to_recent (bool): Prevents adding the file to recent files. FileOpenOptions.FOS_DONTADDTORECENT.
+        show_hidden_files (bool): Shows hidden files and folders. FileOpenOptions.FOS_FORCESHOWHIDDEN.
+        default_no_minimode (bool): Uses default non-minimized mode. FileOpenOptions.FOS_DEFAULTNOMINIMODE.
+        force_preview_pane_on (bool): Forces the preview pane to be visible. FileOpenOptions.FOS_FORCEPREVIEWPANEON.
+        ok_button_text (str): The text for the button used to select/confirm the dialog.
+
+    Returns:
+        list[str] | None: A list of selected folder paths or None if cancelled.
+    """
+    options = 0
+    options |= FileOpenOptions.FOS_PICKFOLDERS
+    options &= ~FileOpenOptions.FOS_ALLNONSTORAGEITEMS
+    if overwrite_prompt:
+        options |= FileOpenOptions.FOS_OVERWRITEPROMPT
+    if strict_file_types:
+        options |= FileOpenOptions.FOS_STRICTFILETYPES
+    if no_change_dir:
+        options |= FileOpenOptions.FOS_NOCHANGEDIR
+    if force_filesystem:
+        options |= FileOpenOptions.FOS_FORCEFILESYSTEM
+    if no_validate:
+        options |= FileOpenOptions.FOS_NOVALIDATE
+    if allow_multiple_selection:
+        options |= FileOpenOptions.FOS_ALLOWMULTISELECT
+    if path_must_exist:
+        options |= FileOpenOptions.FOS_PATHMUSTEXIST
+    if file_must_exist:
+        options |= FileOpenOptions.FOS_FILEMUSTEXIST
+    if create_prompt:
+        options |= FileOpenOptions.FOS_CREATEPROMPT
+    if share_aware:
+        options |= FileOpenOptions.FOS_SHAREAWARE
+    if no_readonly_return:
+        options |= FileOpenOptions.FOS_NOREADONLYRETURN
+    if no_test_file_create:
+        options |= FileOpenOptions.FOS_NOTESTFILECREATE
+    if hide_mru_places:
+        options |= FileOpenOptions.FOS_HIDEMRUPLACES
+    if hide_pinned_places:
+        options |= FileOpenOptions.FOS_HIDEPINNEDPLACES
+    if no_dereference_links:
+        options |= FileOpenOptions.FOS_NODEREFERENCELINKS
+    if not add_to_recent:
+        options |= FileOpenOptions.FOS_DONTADDTORECENT
+    if show_hidden_files:
+        options |= FileOpenOptions.FOS_FORCESHOWHIDDEN
+    if default_no_minimode:
+        options |= FileOpenOptions.FOS_DEFAULTNOMINIMODE
+    if force_preview_pane_on:
+        options |= FileOpenOptions.FOS_FORCEPREVIEWPANEON
+    file_dialog: IFileOpenDialog = comtypes.client.CreateObject(CLSID_FileOpenDialog, interface=IFileOpenDialog)
+    return configure_file_dialog(file_dialog, title, options, default_folder, ok_button_text, None, None, None)
+
+
+def get_open_file_dialog_results(
+    file_open_dialog: IFileOpenDialog,
 ) -> list[str]:
     results: list[str] = []
-    resultsArray: IShellItemArray = fileOpenDialog.GetResults()
-    itemCount: int = resultsArray.GetCount()
+    results_array: IShellItemArray = file_open_dialog.GetResults()
+    itemCount: int = results_array.GetCount()
 
     for i in range(itemCount):
-        shell_item: IShellItem = resultsArray.GetItemAt(i)
+        shell_item: IShellItem = results_array.GetItemAt(i)
         szFilePath: str = shell_item.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
-        szFilePathStr = str(szFilePath)
-        if szFilePathStr and szFilePathStr.strip():
-            results.append(szFilePathStr)
+        if szFilePath and szFilePath.strip():
+            results.append(szFilePath)
             print(f"Item {i} file path: {szFilePath}")
-            #comFuncs.pCoTaskMemFree(szFilePath)   # line crashes
         else:
-            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(szFilePath))
-
-        attributes: c_ulong = shell_item.GetAttributes(SFGAO_FILESYSTEM | SFGAO_FOLDER)
-        print(f"Item {i} attributes: {attributes}")
-
-        parentItem: IShellItem | comtypes.IUnknown = shell_item.GetParent()
-        if isinstance(parentItem, IShellItem) or hasattr(parentItem, "GetDisplayName"):
-            szParentName: LPWSTR | str = parentItem.GetDisplayName(SIGDN.SIGDN_NORMALDISPLAY)
-            print(f"Item {i} parent: {szParentName}")
-            comFuncs.pCoTaskMemFree(szParentName)
-            parentItem.Release()
-
-        shell_item.Release()
-
-    resultsArray.Release()
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), szFilePath)
     return results
 
 
-def getFileSaveDialogResults(  # noqa: C901, PLR0912, PLR0915
-    comFuncs: COMFunctionPointers,  # noqa: N803
-    fileSaveDialog: IFileSaveDialog,  # noqa: N803
-) -> str:
+def get_save_file_dialog_results(fileSaveDialog: IFileSaveDialog) -> str:  # noqa: N803
     results = ""
     resultItem: IShellItem = fileSaveDialog.GetResult()
 
@@ -400,28 +708,106 @@ def getFileSaveDialogResults(  # noqa: C901, PLR0912, PLR0915
     else:
         raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(szFilePath))
 
-    attributes: c_ulong = resultItem.GetAttributes(SFGAO_FILESYSTEM | SFGAO_FOLDER)
+    attributes: int | c_ulong = resultItem.GetAttributes(SFGAO.SFGAO_FILESYSTEM | SFGAO.SFGAO_FOLDER)
     print(f"Selected item attributes: {attributes}")
 
     parentItem: IShellItem | comtypes.IUnknown = resultItem.GetParent()
-    if isinstance(parentItem, IShellItem) or hasattr(parentItem, "GetDisplayName"):
+    if isinstance(parentItem, IShellItem):
         szParentName: LPWSTR | str = parentItem.GetDisplayName(SIGDN.SIGDN_NORMALDISPLAY)
         print(f"Selected item parent: {szParentName}")
-        comFuncs.pCoTaskMemFree(szParentName)
-        parentItem.Release()
-
-    resultItem.Release()
 
     return results
 
 
 # Example usage
 if __name__ == "__main__":
-    selected_folders: list[str] = browse_folders()
-    print("Selected folders:", selected_folders)
-
-    selected_files: list[str] = browse_files()
+    # Randomizing arguments for open_file_dialog
+    open_file_args = {
+        "title": "Open File" if random.choice([True, False]) else None,  # noqa: S311
+        "default_folder": "C:\\Users" if random.choice([True, False]) else None,  # noqa: S311
+        "default_extension": "txt" if random.choice([True, False]) else None,  # noqa: S311
+        "overwrite_prompt": random.choice([True, False]),  # noqa: S311
+        "strict_file_types": random.choice([True, False]),  # noqa: S311
+        "no_change_dir": random.choice([True, False]),  # noqa: S311
+        "force_filesystem": random.choice([True, False]),  # noqa: S311
+        "all_non_storage_items": False,  # random.choice([True, False]),  # noqa: S311
+        "no_validate": random.choice([True, False]),  # noqa: S311
+        "allow_multiple_selection": random.choice([True, False]),  # noqa: S311
+        "path_must_exist": random.choice([True, False]),  # noqa: S311
+        "file_must_exist": random.choice([True, False]),  # noqa: S311
+        "create_prompt": random.choice([True, False]),  # noqa: S311
+        "share_aware": random.choice([True, False]),  # noqa: S311
+        "no_readonly_return": random.choice([True, False]),  # noqa: S311
+        "no_test_file_create": random.choice([True, False]),  # noqa: S311
+        "hide_mru_places": random.choice([True, False]),  # noqa: S311
+        "hide_pinned_places": random.choice([True, False]),  # noqa: S311
+        "no_dereference_links": random.choice([True, False]),  # noqa: S311
+        "add_to_recent": random.choice([True, False]),  # noqa: S311
+        "show_hidden_files": random.choice([True, False]),  # noqa: S311
+        "default_no_minimode": random.choice([True, False]),  # noqa: S311
+        "force_preview_pane_on": random.choice([True, False]),  # noqa: S311
+    }
+    print("\nOpen file args")
+    print(json.dumps(open_file_args, indent=4, sort_keys=True))
+    selected_files: list[str] | None = open_file_and_folder_dialog(**open_file_args)
     print("Selected files:", selected_files)
 
-    saved_file: str = save_file()
+    # Randomizing arguments for open_folder_dialog
+    open_folder_args = {
+        "title": "Select Folder" if random.choice([True, False]) else None,  # noqa: S311
+        "default_folder": "C:\\Users" if random.choice([True, False]) else None,  # noqa: S311
+        "overwrite_prompt": random.choice([True, False]),  # noqa: S311
+        "strict_file_types": random.choice([True, False]),  # noqa: S311
+        "no_change_dir": random.choice([True, False]),  # noqa: S311
+        "force_filesystem": random.choice([True, False]),  # noqa: S311
+        "no_validate": random.choice([True, False]),  # noqa: S311
+        "allow_multiple_selection": random.choice([True, False]),  # noqa: S311
+        "path_must_exist": random.choice([True, False]),  # noqa: S311
+        "file_must_exist": random.choice([True, False]),  # noqa: S311
+        "create_prompt": random.choice([True, False]),  # noqa: S311
+        "share_aware": random.choice([True, False]),  # noqa: S311
+        "no_readonly_return": random.choice([True, False]),  # noqa: S311
+        "no_test_file_create": random.choice([True, False]),  # noqa: S311
+        "hide_mru_places": random.choice([True, False]),  # noqa: S311
+        "hide_pinned_places": random.choice([True, False]),  # noqa: S311
+        "no_dereference_links": random.choice([True, False]),  # noqa: S311
+        "add_to_recent": random.choice([True, False]),  # noqa: S311
+        "show_hidden_files": random.choice([True, False]),  # noqa: S311
+        "default_no_minimode": random.choice([True, False]),  # noqa: S311
+        "force_preview_pane_on": random.choice([True, False]),  # noqa: S311
+    }
+    print("\nOpen folder args")
+    print(json.dumps(open_folder_args, indent=4, sort_keys=True))
+    selected_folders: list[str] | None = open_folder_dialog(**open_folder_args)
+    print("Selected folders:", selected_folders)
+
+    # Randomizing arguments for save_file_dialog
+    save_file_args = {
+        "title": "Save File" if random.choice([True, False]) else None,  # noqa: S311
+        "default_folder": "C:\\Users" if random.choice([True, False]) else None,  # noqa: S311
+        "file_types": [("Text Files", "*.txt")] if random.choice([True, False]) else None,  # noqa: S311
+        "default_extension": "txt" if random.choice([True, False]) else None,  # noqa: S311
+        "overwrite_prompt": random.choice([True, False]),  # noqa: S311
+        "strict_file_types": random.choice([True, False]),  # noqa: S311
+        "no_change_dir": random.choice([True, False]),  # noqa: S311
+        "force_filesystem": random.choice([True, False]),  # noqa: S311
+        "all_non_storage_items": random.choice([True, False]),  # noqa: S311
+        "no_validate": random.choice([True, False]),  # noqa: S311
+        "path_must_exist": random.choice([True, False]),  # noqa: S311
+        "file_must_exist": random.choice([True, False]),  # noqa: S311
+        "create_prompt": random.choice([True, False]),  # noqa: S311
+        "share_aware": random.choice([True, False]),  # noqa: S311
+        "no_readonly_return": random.choice([True, False]),  # noqa: S311
+        "no_test_file_create": random.choice([True, False]),  # noqa: S311
+        "hide_mru_places": random.choice([True, False]),  # noqa: S311
+        "hide_pinned_places": random.choice([True, False]),  # noqa: S311
+        "no_dereference_links": random.choice([True, False]),  # noqa: S311
+        "add_to_recent": random.choice([True, False]),  # noqa: S311
+        "show_hidden_files": random.choice([True, False]),  # noqa: S311
+        "default_no_minimode": random.choice([True, False]),  # noqa: S311
+        "force_preview_pane_on": random.choice([True, False]),  # noqa: S311
+    }
+    print("\nSave file args")
+    print(json.dumps(save_file_args, indent=4, sort_keys=True))
+    saved_file: list[str] | None = save_file_dialog(**save_file_args)
     print("Saved file:", saved_file)
