@@ -247,7 +247,11 @@ def configure_file_dialog(  # noqa: PLR0913, PLR0912, C901, PLR0915
 
         if show_file_dialog(file_dialog, hwnd):
             control_event_handler: FileDialogControlEvents | None = next(
-                (interface for interface in dialog_interfaces if isinstance(interface, FileDialogControlEvents)),
+                (
+                    interface
+                    for interface in dialog_interfaces
+                    if isinstance(interface, FileDialogControlEvents)
+                ),
                 None,
             )
             if control_event_handler and control_event_handler.selected_path:
