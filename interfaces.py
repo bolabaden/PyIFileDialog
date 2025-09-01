@@ -1,3 +1,88 @@
+"""
+PyIFileDialog - Windows COM Interface Definitions
+
+This module contains the Python representations of Windows' COM (Component Object
+Model) interfaces used for file dialogs and shell item manipulation. Think of
+these as blueprints that tell Python exactly how to communicate with Windows'
+native file system APIs.
+
+COM interfaces are Windows' way of defining contracts between different software
+components. Each interface specifies a set of methods that objects must implement,
+along with their exact signatures (parameters, return types, etc.). This ensures
+that different programs can communicate reliably with Windows system services.
+
+Key Interface Categories:
+=========================
+
+File Dialog Interfaces:
+- IFileDialog: Base interface for all file dialogs
+- IFileOpenDialog: Specialized for opening/selecting existing files
+- IFileSaveDialog: Specialized for saving/creating new files  
+- IFileDialogCustomize: Adds custom controls to dialogs
+- IFileDialogEvents: Handles dialog events and callbacks
+
+Shell Item Interfaces:
+- IShellItem: Represents a single file or folder in Windows shell
+- IShellItemArray: Collection of multiple shell items
+- IShellFolder: Represents a folder with enumeration capabilities
+- IModalWindow: Base for modal dialog windows
+
+Progress & Event Interfaces:
+- IFileOperationProgressSink: Monitors file operation progress
+- IFileDialogControlEvents: Handles custom control interactions
+
+Each interface defines its methods using COMMETHOD specifications that describe:
+- Return types (usually HRESULT for error handling)
+- Parameter types and directions ([in], [out], [in,out])
+- Method names and calling conventions
+
+The module also includes concrete COMObject implementations that provide default
+behavior for these interfaces, allowing you to create working COM objects that
+Windows can interact with directly.
+
+GUID Constants:
+===============
+
+Each interface has a unique GUID (Globally Unique Identifier) that Windows uses
+to identify it. These IID_* constants ensure we're talking to the right interface
+when requesting services from COM objects.
+
+Example Interface Usage:
+========================
+
+```python
+# Create a file open dialog
+file_dialog = comtypes.client.CreateObject(
+    CLSID_FileOpenDialog, 
+    interface=IFileOpenDialog
+)
+
+# Configure it
+file_dialog.SetTitle("Choose Files")
+file_dialog.SetOptions(FileOpenOptions.FOS_ALLOWMULTISELECT)
+
+# Show it
+hr = file_dialog.Show(None)
+if hr == S_OK:
+    results = file_dialog.GetResults()
+    # Process selected files...
+```
+
+Thread Safety & COM Apartments:
+===============================
+
+COM interfaces must be used from the same thread apartment where they were
+created. Most UI-related interfaces (like file dialogs) require the STA
+(Single Threaded Apartment) model, which is typically the main GUI thread.
+
+Memory Management:
+==================
+
+All COM objects use reference counting for memory management. The base IUnknown
+interface provides AddRef() and Release() methods that track object lifetime.
+Python's comtypes library handles most of this automatically, but custom
+implementations need to be careful about proper cleanup.
+"""
 from __future__ import annotations
 
 from ctypes import POINTER, POINTER as C_POINTER, c_bool, c_int, c_uint, c_ulong, c_void_p, c_wchar_p
