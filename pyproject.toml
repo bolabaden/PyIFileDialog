@@ -7,39 +7,27 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = [
-    "Tools",
-    "Libraries",
+    "PyIFileDialog",
 ]
 
 [project]
-name="PyKotor"
-version="1.7"
-description="Read, modify and write files used by KotOR's game engine."
-authors = [{name = "NickHugi"}]
-maintainers = [{name = "th3w1zard1", email = "halomastar@gmail.com"}]
+name="PyIFileDialog"
+version="1.0.0"
+description="A Python library for Windows File Dialogs without comtypes/pywin32 dependencies"
+authors = [{name = "PyIFileDialog Contributors"}]
 readme = {file = "README.md", content-type = "text/markdown"}
-license = {text = "GPLv3 License"}
-keywords = ["kotor", "library", "holocron", "toolset", "pykotor", "editor", "holopatcher", "tslpatcher"]
+license = {text = "MIT License"}
+keywords = ["windows", "file-dialog", "dialog", "gui", "com", "windows-api", "file-picker"]
 requires-python = ">= 3.8"
 
 [project.optional-dependencies]
-font                 = ["Pillow>=9.5"]    # required for TXI/TGA fonts
-secure_xml           = ["defusedxml~=0.7"]    # secure XML parsing
-encodings = ["charset-normalizer>=2.0,<3.4"]  # used for localized string decodings
-gl = [
-  "django>2.1; os_name != 'nt'",
-  "django>2.0; os_name == 'nt'",
-  "numpy~=1.22",      # ( might need 1.22.2 )
-  "PyOpenGL~=3.1",    # ( might need 3.1.6 )
-  "PyGLM>=2.0,<2.8",  # ( might need 2.5.7 )
-]
+comtypes = ["comtypes>=1.2.0"]  # optional dependency for alternative COM implementations
 
 [project.urls]
-Homepage = "https://github.com/NickHugi/PyKotor"
-Documentation = "https://github.com/NickHugi/PyKotor/blob/master/README.md"
-Repository = "https://github.com/NickHugi/PyKotor.git"
-Issues = "https://github.com/NickHugi/PyKotor/issues"
-#Changelog = "https://github.com/NickHugi/PyKotor/blob/master/CHANGELOG.md"
+Homepage = "https://github.com/bolabaden/PyIFileDialog"
+Documentation = "https://github.com/bolabaden/PyIFileDialog/blob/main/README.md"
+Repository = "https://github.com/bolabaden/PyIFileDialog.git"
+Issues = "https://github.com/bolabaden/PyIFileDialog/issues"
 
 ########################################################
 ## define only linter configurations below this point ##
@@ -121,16 +109,7 @@ output-format = "grouped"  # Group violations by containing file.
 respect-gitignore = false
 
 src = [
-    "Libraries/PyKotor/src",
-    "Libraries/PyKotorGL/src",
-    "Libraries/PyKotorFont/src",
-    "Libraries/Utility/src",
-    "Tools/HolocronToolset/src",
-    "Tools/BatchPatcher/src",
-    "Tools/HoloPatcher/src",
-    "Tools/KotorDiff/src",
-    "Tools/GuiDuplicator/src",
-    "Tools/MDLDecompile/src",
+    ".",
     "tests"
 ]
 

@@ -1,3 +1,27 @@
+"""
+PyIFileDialog - COM Foundation & IUnknown Base Interface
+
+This module provides the fundamental building blocks for all COM (Component Object
+Model) interactions in Windows. Every COM object inherits from IUnknown, making
+this the bedrock of the entire system.
+
+IUnknown is COM's base interface that provides three essential capabilities:
+1. QueryInterface: Ask an object "do you support interface X?"
+2. AddRef: Increment the object's reference count (keep it alive)
+3. Release: Decrement reference count (allow cleanup when no longer needed)
+
+This reference counting system ensures proper memory management - objects stay
+alive as long as someone needs them, and automatically clean up when forgotten.
+
+Key Components:
+- IUnknown: The base COM interface with reference counting
+- COMBase: Base structure for COM objects
+- Various Windows type definitions (HWND, LPWSTR, etc.)
+- Helper functions for reference counting operations
+
+Think of this as the foundation that makes all other COM functionality possible.
+Without proper IUnknown implementation, COM objects would leak memory or crash.
+"""
 from __future__ import annotations
 
 from ctypes import (

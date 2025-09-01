@@ -1,3 +1,99 @@
+"""
+PyIFileDialog - Native Windows File Dialog Interface
+
+This is the main user-facing module of PyIFileDialog, providing simple, intuitive
+functions for displaying Windows' beautiful native file dialogs. No more dealing
+with complex COM libraries or settling for basic file pickers - get the full
+power of Windows' modern dialog system with clean Python APIs.
+
+What This Module Provides:
+==========================
+
+Core Dialog Functions:
+- open_file_dialog(): Select existing files with rich filtering options
+- save_file_dialog(): "Save As" dialogs with validation and overwrite protection  
+- open_folder_dialog(): Directory selection with multi-folder support
+- open_file_and_folder_dialog(): Hybrid approach for maximum flexibility
+
+Under the Hood:
+===============
+
+This module orchestrates several complex processes:
+
+1. COM Initialization: Sets up Windows' Component Object Model system
+2. Dialog Creation: Instantiates the appropriate IFileDialog COM objects
+3. Configuration: Applies your options using Windows constants and flags
+4. Display: Shows the native Windows dialog using system APIs
+5. Result Processing: Extracts selected paths and formats them for Python
+6. Cleanup: Properly releases all COM objects and resources
+
+All of this complexity is hidden behind simple function calls that feel natural
+to Python developers. You get professional, native-looking dialogs without
+needing to understand the intricacies of COM programming.
+
+Advanced Features:
+==================
+
+- Rich file type filtering with custom extensions
+- Multi-selection support for files and folders
+- Dialog behavior customization (validation, hidden files, etc.)
+- Custom button labels and dialog titles
+- Default folder and extension handling
+- Integration with Windows' recent files and places
+
+Each function accepts intuitive keyword arguments that map to Windows' underlying
+dialog options, giving you fine-grained control while maintaining simplicity.
+
+Example Usage:
+==============
+
+```python
+# Simple file selection
+files = open_file_dialog(title="Choose your files")
+
+# Advanced file selection with filtering
+files = open_file_dialog(
+    title="Import Images",
+    file_types=[
+        ("Images", "*.jpg;*.png;*.gif"),
+        ("JPEG Files", "*.jpg;*.jpeg"),
+        ("All Files", "*.*")
+    ],
+    allow_multiple_selection=True,
+    default_folder="C:/Pictures"
+)
+
+# Save dialog with validation
+save_path = save_file_dialog(
+    title="Export Report",
+    default_extension="pdf",
+    file_types=[("PDF Files", "*.pdf")],
+    overwrite_prompt=True
+)
+
+# Folder selection
+folder = open_folder_dialog(
+    title="Choose Destination",
+    allow_multiple_selection=False
+)
+```
+
+Error Handling:
+===============
+
+All functions return None if the user cancels the dialog. Actual errors (like
+invalid paths or COM failures) raise appropriate Python exceptions with helpful
+messages. The module handles Windows-specific errors gracefully, translating
+cryptic COM error codes into meaningful exception messages.
+
+Thread Safety:
+==============
+
+These functions are designed to be called from the main GUI thread. COM
+initialization and dialog display must happen on the same thread that will
+process Windows messages. For background threads, ensure proper COM apartment
+initialization before calling these functions.
+"""
 from __future__ import annotations
 
 import errno

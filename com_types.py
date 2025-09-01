@@ -1,3 +1,19 @@
+"""
+PyIFileDialog - Windows COM Type Definitions
+
+This module defines the core COM types used throughout PyIFileDialog, providing
+the foundation for all Windows Component Object Model (COM) interactions.
+
+Key Components:
+- GUID: Globally Unique Identifiers for COM interfaces
+- FDE_*: File Dialog Event response enumerations
+- Thread-safe GUID singleton pattern for memory efficiency
+
+The GUID class is particularly important as it represents the unique identifiers
+that Windows uses to distinguish between different COM interfaces and objects.
+Think of it as COM's addressing system - every interface has a unique GUID that
+tells Windows exactly which functionality you're trying to access.
+"""
 from __future__ import annotations
 
 import threading
