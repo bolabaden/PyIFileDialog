@@ -1,3 +1,30 @@
+"""
+PyIFileDialog - Windows Error Handling & HRESULT Management
+
+This module provides comprehensive handling of Windows' HRESULT error codes,
+making COM programming more pleasant by converting cryptic numeric codes into
+meaningful Python exceptions.
+
+HRESULT (Handle to Result) is Windows' standard way of indicating success or
+failure from COM function calls. Instead of simple True/False, Windows uses
+32-bit values that encode:
+- Success/Failure (1 bit)
+- Facility (which subsystem) (12 bits)  
+- Error code (16 bits)
+
+This module decodes these values into human-readable messages and provides
+proper Python exception handling, so you don't need to memorize hex codes
+or deal with raw numeric errors.
+
+Key Classes:
+- HRESULT: Enhanced ctypes HRESULT with decoding capabilities
+- HRESULTError: Python exception for COM errors
+
+Common Values:
+- S_OK (0): Success
+- S_FALSE (1): Success but with a false result
+- E_* values: Various error conditions
+"""
 from __future__ import annotations
 
 from ctypes import HRESULT as ctypesHRESULT, c_long  # noqa: N811

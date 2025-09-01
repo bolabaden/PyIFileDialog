@@ -1,3 +1,99 @@
+"""
+PyIFileDialog - Native Windows File Dialog Interface
+
+This is the main user-facing module of PyIFileDialog, providing simple, intuitive
+functions for displaying Windows' beautiful native file dialogs. No more dealing
+with complex COM libraries or settling for basic file pickers - get the full
+power of Windows' modern dialog system with clean Python APIs.
+
+What This Module Provides:
+==========================
+
+Core Dialog Functions:
+- open_file_dialog(): Select existing files with rich filtering options
+- save_file_dialog(): "Save As" dialogs with validation and overwrite protection  
+- open_folder_dialog(): Directory selection with multi-folder support
+- open_file_and_folder_dialog(): Hybrid approach for maximum flexibility
+
+Under the Hood:
+===============
+
+This module orchestrates several complex processes:
+
+1. COM Initialization: Sets up Windows' Component Object Model system
+2. Dialog Creation: Instantiates the appropriate IFileDialog COM objects
+3. Configuration: Applies your options using Windows constants and flags
+4. Display: Shows the native Windows dialog using system APIs
+5. Result Processing: Extracts selected paths and formats them for Python
+6. Cleanup: Properly releases all COM objects and resources
+
+All of this complexity is hidden behind simple function calls that feel natural
+to Python developers. You get professional, native-looking dialogs without
+needing to understand the intricacies of COM programming.
+
+Advanced Features:
+==================
+
+- Rich file type filtering with custom extensions
+- Multi-selection support for files and folders
+- Dialog behavior customization (validation, hidden files, etc.)
+- Custom button labels and dialog titles
+- Default folder and extension handling
+- Integration with Windows' recent files and places
+
+Each function accepts intuitive keyword arguments that map to Windows' underlying
+dialog options, giving you fine-grained control while maintaining simplicity.
+
+Example Usage:
+==============
+
+```python
+# Simple file selection
+files = open_file_dialog(title="Choose your files")
+
+# Advanced file selection with filtering
+files = open_file_dialog(
+    title="Import Images",
+    file_types=[
+        ("Images", "*.jpg;*.png;*.gif"),
+        ("JPEG Files", "*.jpg;*.jpeg"),
+        ("All Files", "*.*")
+    ],
+    allow_multiple_selection=True,
+    default_folder="C:/Pictures"
+)
+
+# Save dialog with validation
+save_path = save_file_dialog(
+    title="Export Report",
+    default_extension="pdf",
+    file_types=[("PDF Files", "*.pdf")],
+    overwrite_prompt=True
+)
+
+# Folder selection
+folder = open_folder_dialog(
+    title="Choose Destination",
+    allow_multiple_selection=False
+)
+```
+
+Error Handling:
+===============
+
+All functions return None if the user cancels the dialog. Actual errors (like
+invalid paths or COM failures) raise appropriate Python exceptions with helpful
+messages. The module handles Windows-specific errors gracefully, translating
+cryptic COM error codes into meaningful exception messages.
+
+Thread Safety:
+==============
+
+These functions are designed to be called from the main GUI thread. COM
+initialization and dialog display must happen on the same thread that will
+process Windows messages. For background threads, ensure proper COM apartment
+initialization before calling these functions.
+"""
 from __future__ import annotations
 
 import errno
@@ -80,7 +176,32 @@ def show_file_dialog(
     fileDialog: IFileOpenDialog | IFileSaveDialog,  # noqa: N803
     hwndOwner: HWND,  # noqa: N803
 ) -> bool:
-    """Shows the IFileDialog. Returns True if the user progressed to the end and found a file. False if they cancelled."""
+    """
+    Display a Windows file dialog and handle user interaction.
+    
+    This is the core function that actually shows the dialog to the user and
+    manages the interaction. It handles the complex details of COM error codes
+    and user cancellation, providing a clean boolean result.
+    
+    The function carefully distinguishes between user cancellation (which returns
+    False) and actual errors (which raise exceptions). This allows calling code
+    to handle these scenarios appropriately.
+    
+    Args:
+        fileDialog: The configured COM dialog object (open or save variant)
+        hwndOwner: Handle to the parent window (use 0 for no parent)
+    
+    Returns:
+        bool: True if user completed dialog successfully, False if cancelled
+        
+    Raises:
+        OSError: For actual COM errors or system failures
+        
+    Implementation Notes:
+        - Handles the special Windows error code for user cancellation
+        - Uses HRESULT.raise_for_status() for proper error reporting
+        - Provides debug output for development/troubleshooting
+    """
     hr: HRESULT | int = -1
     CANCELLED_BY_USER = -2147023673
 
@@ -163,7 +284,50 @@ def configure_file_dialog(  # noqa: PLR0913, PLR0912, C901, PLR0915
     default_extension: str | None = None,
     dialog_interfaces: list[comtypes.IUnknown | comtypes.COMObject] | None = None,
     hwnd: HWND | int | None = None,
-) -> list[str] | None:  # sourcery skip: low-code-quality
+) -> list[str] | None:  
+    """
+    Configure and display a Windows file dialog with comprehensive options.
+    
+    This is the workhorse function that takes a raw COM dialog object and
+    transforms it into a fully configured, user-ready dialog. It handles
+    all the intricate details of setting options, validating configurations,
+    and processing results.
+    
+    The function performs several critical tasks:
+    1. Applies all configuration options to the dialog
+    2. Resolves conflicting settings automatically
+    3. Sets up file type filters and validation
+    4. Displays the dialog and processes user interaction
+    5. Extracts and formats the results for Python consumption
+    
+    Option Conflict Resolution:
+    The function automatically detects and resolves conflicting Windows options.
+    For example, FOS_ALLNONSTORAGEITEMS conflicts with FOS_FORCEFILESYSTEM,
+    so the function will automatically disable the conflicting option and
+    provide debug output explaining the change.
+    
+    Args:
+        file_dialog: Pre-created COM dialog object to configure
+        title: Dialog window title
+        options: Bitwise combination of FileOpenOptions flags
+        default_folder: Initial directory to display
+        ok_button_label: Custom text for the accept button
+        file_name_label: Label for the file name input field
+        file_types: List of (description, pattern) tuples for file filtering
+        default_extension: Extension to auto-append when saving
+        dialog_interfaces: Event handlers and custom interfaces to attach
+        hwnd: Parent window handle (0 for no parent)
+        
+    Returns:
+        list[str] | None: Selected file/folder paths, or None if cancelled
+        
+    Implementation Details:
+        - Validates and resolves option conflicts automatically
+        - Creates proper Windows shell items for default folders
+        - Handles both open and save dialog result processing
+        - Manages COM event handler registration/cleanup
+        - Provides comprehensive debug output for troubleshooting
+    """
     cookies: list[int] = []
     if dialog_interfaces:
         for interface in dialog_interfaces:

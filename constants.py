@@ -1,3 +1,23 @@
+"""
+PyIFileDialog - Windows Constants & Enumerations
+
+This module organizes the numerous constants and enumerations used by Windows
+file dialogs into meaningful, typed groups. Instead of remembering magic numbers,
+you get clear, self-documenting constants that make your code more readable.
+
+Windows APIs often use bit flags and numeric constants to control behavior.
+This module groups them logically:
+
+- FileOpenOptions: Controls how file dialogs behave (multi-select, validation, etc.)
+- SFGAO: Shell File/Folder Attribute Options (what properties items have)
+- SIGDN: Shell Item Get Display Name types (how to format paths)
+- FDAP: File Dialog Add Place positioning
+- FDE_*: File Dialog Event response types
+- COMDLG_FILTERSPEC: Structure for file type filters
+
+Each enumeration uses Python's IntFlag, so you can combine options with bitwise
+operators (|, &, ~) just like in C/C++ Windows programming.
+"""
 from __future__ import annotations
 
 from ctypes import Structure, c_int, c_ulong

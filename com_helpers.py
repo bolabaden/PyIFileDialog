@@ -1,3 +1,27 @@
+"""
+PyIFileDialog - COM Helper Utilities & Context Managers
+
+This module provides utility functions and context managers that make COM
+programming more reliable and pleasant. COM requires careful initialization,
+cleanup, and error handling - this module handles those details for you.
+
+Key Components:
+
+Context Managers:
+- COMInitializeContext: Ensures COM is properly initialized/uninitialized
+- COMCreateInstanceContext: Creates COM objects with proper lifecycle management
+- HandleCOMCall: Provides robust error handling for COM function calls
+
+Utility Functions:
+- comtypes_get_refcount: Helper for debugging COM reference counting
+- comtypes2pywin: Bridge between comtypes and pythoncom when needed
+- register_idispatch_object: Register COM objects for advanced scenarios
+
+These utilities abstract away the boring but critical aspects of COM programming
+like initialization, reference counting, and error handling. You can focus on
+your application logic while this module ensures everything works correctly
+under the hood.
+"""
 from __future__ import annotations
 
 import sys
